@@ -102,9 +102,12 @@ and [KMS Operations](https://docs.canton.network/global-synchronizer/production-
 Canton does expose a [KMS Driver API](https://docs.canton.network/global-synchronizer/reference/kms-driver-guide)
 for custom integrations, but the API artifact and the `kms` crypto provider both
 require a licensed Canton Enterprise build — a custom driver does not get you
-around that. The community Splice validator uses the `jce` provider with keys in
-the database. So NodePilot can *configure and wire up* KMS for operators who have
-Enterprise, but it cannot enable it on a community node.
+around that. The driver guide states it plainly: *"You must have a Canton
+enterprise license and account to access the artifact,"* and the KMS node runs as
+`CantonEnterpriseApp`. The KMS Operations page likewise marks the AWS and GCP
+providers as Enterprise-only. The community Splice validator uses the `jce`
+provider with keys in the database. So NodePilot can *configure and wire up* KMS
+for operators who have Enterprise, but it cannot enable it on a community node.
 
 - [ ] GCP KMS wiring on the participant Helm chart (`kms.type: gcp`, location /
       project / key ring, `GOOGLE_APPLICATION_CREDENTIALS` secret) — Enterprise only

@@ -84,6 +84,15 @@ by ThemeSelection, used under the MIT License.
 See [CHANGELOG.md](CHANGELOG.md) for release history and [ROADMAP.md](ROADMAP.md)
 for what's planned next. Current release: **v1.1.0**.
 
+## Sponsor this project
+
+NodePilot is built and maintained in the open. If it saves you time, you can
+support its development on the Canton Network by sending to our party:
+
+```
+b2a11d907944-askardex::1220bd53dd8475646097f233957b61695a91e2b5a1882e393337e321f9e89097a96f
+```
+
 ## License
 
 Released under the MIT License. See [LICENSE](LICENSE).
