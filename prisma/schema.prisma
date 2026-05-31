@@ -1,0 +1,299 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Authentication ────────────────────────────────────────────────
+
+model User {
+  id             String    @id @default(cuid())
+  name           String
+  email          String    @unique
+  passwordHash   String
+  role           String    @default("admin") // admin | viewer (future)
+  emailVerified  DateTime?
+  image          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  sessions       Session[]
+  accounts       Account[]
+  validators     Validator[]
+  sslCertificates SslCertificate[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─── Application Models ────────────────────────────────────────────
+
+model Validator {
+  id              String   @id
+  name            String
+  host            String
+  sshPort         Int      @default(22)
+  sshUsername     String   @default("root")
+  sshAuthType     String   @default("password") // password | key
+  sshPassword     String?  // stored encrypted
+  sshPrivateKey   String?  // stored encrypted
+  network         String   @default("DevNet") // DevNet | TestNet | MainNet
+  validatorPort   Int      @default(5003)
+  version         String?
+  partyId         String?
+  synchronizerId  String?
+  hostname        String?  // detected during connection test
+  status          String   @default("Offline") // Online | Offline | Error | Installing
+  uptime          String?
+  lastSyncAt      DateTime?
+  lastHealthCheck DateTime?
+
+  // Canton/Splice installation state (mirrors the currently-active installation)
+  installState    String   @default("NotInstalled") // NotInstalled | Installing | Installed | InstallError
+  spliceVersion   String?  // e.g. "0.5.17" — active version
+  installPath     String?  // e.g. "/root/splice-nodes/v0.5.17" — active install dir
+  installLog      String?  // last install output (for retry/debug)
+  installError    String?  // last error message
+  installedAt     DateTime?
+
+  // Deployment mode: compose (Docker Compose via SSH) or k8s (Kubernetes via Helm)
+  deploymentMode  String   @default("compose") // compose | k8s
+
+  // Runtime state (Stage 6 — Start Validator)
+  runState        String   @default("Stopped") // Stopped | Starting | Running | Stopping | StartError
+  lastStartedAt   DateTime?
+  lastStoppedAt   DateTime?
+  lastStartError  String?
+  lastStartLog    String?  // last start.sh output (truncated)
+
+  installations   SpliceInstallation[]
+  config          ValidatorConfig?
+  k8sConfig       K8sConfig?
+
+  userId          String?
+  owner           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// One-to-one configuration that maps to docker-compose/validator/.env and
+// start.sh flags. Filled progressively across stages 3 (network), 4 (auth),
+// and 5 (advanced) of the validator setup wizard.
+//
+// Security note: secrets (onboardingSecret, validatorClientSecret,
+// keycloakAdminPass, keycloakOperatorPass) are encrypted at rest.
+model ValidatorConfig {
+  validatorId           String   @id
+
+  // Stage 3: Network parameters (mandatory before start)
+  migrationId           Int?
+  sponsorSvUrl          String?  // -s SPONSOR_SV_URL (sv.*)
+  scanUrl               String?  // -c SCAN_URL (scan.*)
+  sequencerUrl          String?  // -q SEQUENCER_URL (sequencer-N.*:443)
+  onboardingSecret      String?  // single-use, may be cleared after first start
+  partyHint             String?  // immutable after first start (operator party prefix)
+  disableBft            Boolean  @default(true) // -b flag (currently recommended)
+
+  // Stage 4: Authentication (toggle; required for TestNet/MainNet)
+  authEnabled           Boolean  @default(false)
+  authUrl               String?
+  authJwksUrl           String?
+  authWellknownUrl      String?
+  ledgerApiAudience     String?
+  ledgerApiScope        String?
+  ledgerApiAdminUser    String?
+  validatorAudience     String?
+  validatorClientId     String?
+  validatorClientSecret String? // encrypted at rest
+  walletAdminUser       String?
+  walletUiClientId      String?
+  ansUiClientId         String?
+  contactPoint          String?
+
+  // Stage 5: Public Access (domain & SSL via nginx reverse proxy)
+  // Mode "direct" = use http://<vps-ip>:<port> directly. OIDC cannot be
+  // enabled in direct mode (Auth0/Keycloak require an https callback URL).
+  // Mode "domain" = nginx reverse proxy in front of all enabled services,
+  // optionally with Let's Encrypt SSL.
+  publicAccessMode      String   @default("direct") // "direct" | "domain"
+
+  // Routing layout
+  routingMode           String   @default("multi")  // "multi" (subdomains) | "path" (paths under baseDomain)
+  baseDomain            String?                     // e.g. node.mynode.com — root domain
+
+  // Per-service enable + subdomain (used in multi mode; subdomain ignored in path mode)
+  enableWallet          Boolean  @default(true)
+  walletSubdomain       String?  @default("wallet")
+  enableAns             Boolean  @default(true)
+  ansSubdomain          String?  @default("ans")
+  enableApi             Boolean  @default(true)    // JSON / HTTP validator API
+  apiSubdomain          String?  @default("api")
+  enableMetrics         Boolean  @default(false)   // Prometheus
+  metricsSubdomain      String?  @default("metrics")
+  enableGrpcLedger      Boolean  @default(false)   // public gRPC ledger API (requires OIDC)
+  grpcLedgerSubdomain   String?  @default("grpc")
+
+  // Internal service ports on the VPS — defaults from canton-ops + Splice compose
+  portLedgerApi         Int?     @default(5001)
+  portWalletUi          Int?     @default(2000)
+  portJsonApi           Int?     @default(7575)
+  portValidatorApi      Int?     @default(5003)
+  portSpliceNginx       Int?     @default(8080)
+
+  // Cached canonical hosts (computed from baseDomain + subdomain on save).
+  // Kept so other features (Auth lock, OIDC redirect URI rendering) can
+  // read a single field without re-deriving.
+  walletDomain          String?
+  ansDomain             String?
+  validatorDomain       String?
+
+  sslEnabled            Boolean  @default(false)
+  sslEmail              String?  // for Let's Encrypt registration
+  sslCertificateId      String?  // FK → SslCertificate (reuse stored cert)
+  sslCertificate        SslCertificate? @relation(fields: [sslCertificateId], references: [id], onDelete: SetNull)
+  nginxDeployedAt       DateTime?
+
+  // Stage 6: Advanced (optional)
+  proxyHost             String?
+  proxyPort             Int?
+  autoTopUpEnabled      Boolean  @default(false) // toggle auto top-up traffic
+  trafficThroughput     Int?     @default(200000) // bytes/sec (TARGET_TRAFFIC_THROUGHPUT)
+  trafficTopupInterval  String?  @default("1m")   // e.g. "1m" (MIN_TRAFFIC_TOPUP_INTERVAL)
+
+  // Keycloak — Nodepilot-managed self-hosted OIDC server
+  // Port default 8180 avoids conflict with portSpliceNginx (8080)
+  keycloakEnabled       Boolean   @default(false)
+  keycloakPort          Int?      @default(8180)
+  keycloakRealm         String?   @default("canton")
+  keycloakAdminPass     String?   // encrypted at rest
+  keycloakOperatorPass  String?   // encrypted at rest
+  keycloakDeployedAt    DateTime?
+
+  // Expose Keycloak via nginx reverse proxy (subdomain only, not path mode)
+  enableKeycloak        Boolean   @default(false)
+  keycloakSubdomain     String?   @default("auth")
+
+  // Meta
+  configuredAt          DateTime?
+  firstStartedAt        DateTime? // set after first successful start; party hint becomes immutable
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  validator             Validator @relation(fields: [validatorId], references: [id], onDelete: Cascade)
+}
+
+// SSL certificates — stored for reuse across validators.
+// Source "letsencrypt" = generated via certbot on a VPS, then imported.
+// Source "custom" = user-uploaded cert + key pair.
+model SslCertificate {
+  id          String   @id @default(cuid())
+  label       String   // user-friendly name, e.g. "Askardex DevNet Wildcard"
+  domains     String   // comma-separated FQDNs covered by this cert
+  source      String   @default("custom") // "letsencrypt" | "custom"
+  certPem     String   // PEM-encoded certificate (fullchain)
+  keyPem      String   // PEM-encoded private key
+  expiresAt   DateTime?
+  issuedAt    DateTime?
+
+  userId      String?
+  owner       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  validators  ValidatorConfig[]
+}
+
+// Kubernetes configuration for validators running in k8s mode.
+// Kubeconfig contains cluster credentials — stored encrypted.
+model K8sConfig {
+  validatorId     String   @id
+  kubeconfig      String?  // encrypted — populated by /k8s/connect
+  context         String   @default("default")
+  namespace       String   @default("validator")
+  chartVersion    String?  // e.g. "0.5.18"
+  clusterType     String   @default("k3s") // k3s | gke | eks | aks | doks | other
+  region          String?  // optional, for cloud managed clusters
+  ingressHostname String?  // e.g. "validator.askardex.com"
+  kmsEnabled      Boolean  @default(false)
+  kmsProvider     String?  // aws | gcp
+
+  // Step status timestamps (used by K8s Connection card)
+  connectedAt        DateTime?
+  lastTestedAt       DateTime?
+  namespaceCreatedAt DateTime?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  validator       Validator @relation(fields: [validatorId], references: [id], onDelete: Cascade)
+}
+
+// One row per Splice version installed on a validator's host.
+// Allows multiple versions to coexist; exactly one is marked active
+// (the one that will be used by docker compose / start commands).
+model SpliceInstallation {
+  id          String   @id @default(cuid())
+  validatorId String
+  version     String   // e.g. "0.5.17"
+  installPath String   // e.g. "/root/splice-nodes/v0.5.17"
+  isActive    Boolean  @default(false)
+  installedAt DateTime @default(now())
+
+  validator   Validator @relation(fields: [validatorId], references: [id], onDelete: Cascade)
+
+  @@unique([validatorId, version])
+  @@index([validatorId])
+}
+
+model SvScanNode {
+  id        String @id @default(cuid())
+  name      String
+  url       String
+  network   String // DevNet | TestNet | MainNet
+  version   String?
+  createdAt DateTime @default(now())
+}
+
+// Per-network defaults for the Stage 3 form. Editable by operators
+// (e.g. when migration ID rolls forward, or when pointing at a different
+// sponsor SV) without redeploying the frontend. Used only as form
+// pre-fill — saved values live in ValidatorConfig.
+model NetworkPreset {
+  network       String   @id // "DevNet" | "TestNet" | "MainNet"
+  sponsorSvUrl  String   @default("")
+  scanUrl       String   @default("")
+  sequencerUrl  String   @default("")
+  migrationId   Int?
+  updatedAt     DateTime @updatedAt
+}
