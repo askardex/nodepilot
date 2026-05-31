@@ -124,6 +124,23 @@ can take that further:
 > The participant-key half is Kubernetes-only, so it depends on the Kubernetes
 > path below being solid first. The NodePilot-side half works on any deployment.
 
+### Key protection without Enterprise
+
+A KMS keeps the participant key inside hardware so it never leaves. Without an
+Enterprise licence the keys live in the participant database under the `jce`
+provider, but that does not mean they have to sit unprotected. These steps raise
+the bar a lot, cost nothing, and work on any deployment:
+
+- [ ] Encrypt the disk / volume holding the participant database (LUKS or the
+      cloud provider's disk encryption)
+- [ ] Host hardening: restrict database access, no key export, lock down egress
+- [ ] Store the node identities backup encrypted in a cloud Secret Manager rather
+      than on plain disk
+
+> This is "keys encrypted at rest", not "keys never leave the HSM". It is not a
+> substitute for KMS, but for most operators it is a sensible baseline while the
+> Enterprise KMS path stays optional.
+
 ## v1.7.0 — Kubernetes parity
 
 The Helm path exists but does not yet deploy a working validator end to end.
