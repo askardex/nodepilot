@@ -3,12 +3,22 @@
 This is a working plan, not a promise. Items move as priorities shift and as the
 Canton/Splice releases land. Current release: **v1.1.0**.
 
-A note on scope: NodePilot manages the validator application. Network-level
-onboarding — getting your egress IP onto the SV allowlist and obtaining an
-onboarding secret from your SV sponsor — happens outside the tool and is covered
-in the
-[Canton validator onboarding docs](https://docs.canton.network/global-synchronizer/deployment/onboarding-process).
-NodePilot takes over once you have a secret and a reachable host.
+## Scope
+
+NodePilot is a tool a single operator runs to manage their own validator. It is
+**not** a SaaS product and there is no multi-tenant or multi-user account model —
+one operator, one console, the validators they own. The "users" NodePilot helps
+manage are the wallet users and parties *inside* a validator, which is a different
+thing from who logs into NodePilot.
+
+Network-level onboarding happens outside the tool: you give your egress IP to an
+SV sponsor for the allowlist, and you get an onboarding secret from them (self-serve
+on DevNet, manual on TestNet/MainNet). NodePilot picks up once you have a secret
+and a reachable host. Reference:
+[Validator Onboarding Process](https://docs.canton.network/global-synchronizer/deployment/onboarding-process).
+
+Every item below maps to the official Canton validator docs so the behaviour stays
+aligned with upstream rather than reinvented.
 
 ## Working today (v1.1.0)
 
@@ -19,54 +29,95 @@ NodePilot takes over once you have a secret and a reachable host.
 
 ## Known issues
 
-These are real gaps in the current release, listed so nobody is surprised.
+Real gaps in the current release, listed so nobody is surprised.
 
-- **User onboarding keys off the Keycloak subject ID.** New users are identified
-  by the raw Keycloak ID instead of a chosen username, so the mapping from a
-  human account to a Canton party isn't where it should be.
-- **Every onboarded account lands as a validator.** There's no distinction yet
-  between the validator operator and a regular wallet user / party — everyone
-  ends up with validator status.
-- **Keycloak setup is fragile.** It comes up, but the realm/client wiring needs
-  hardening before it's dependable.
+- **Wallet users are keyed off the raw Keycloak subject ID.** New users get
+  identified by the OIDC subject instead of a chosen, human-readable party, so the
+  account-to-party mapping isn't where it should be.
+- **Every onboarded account ends up with validator status.** There's no separation
+  yet between the validator operator's party and a regular wallet user's party.
+- **Keycloak setup is fragile.** It comes up, but the realm/client wiring needs to
+  be made idempotent before it's dependable.
 
-## v1.2.0 — Fix user and party onboarding
+## v1.2.0 — User and party onboarding
 
-The priority. Make the Keycloak-to-Canton mapping correct and predictable.
+The priority. The fix is already described upstream in
+[Validator Users and Wallets](https://docs.canton.network/global-synchronizer/deployment/validator-users):
+the validator exposes `POST /api/validator/v0/admin/users` with three modes, and
+NodePilot should drive it instead of letting every user auto-onboard a fresh party
+off their Keycloak ID.
 
-- [ ] Map a chosen username (not the Keycloak subject) to the Canton user
-- [ ] Resolve and store the party ID for each onboarded account
-- [ ] Distinguish roles: validator operator vs. wallet user
-- [ ] Harden Keycloak realm/client provisioning and make it idempotent
-- [ ] Surface the party ID and role on the user list in the UI
+- [ ] Pre-create a user via the admin API so the "Onboard yourself" path is skipped
+- [ ] Custom party hint mode: allocate `name::namespace` parties with readable hints
+- [ ] Associate-with-existing-party mode: point a user at the operator's wallet
+- [ ] Separate the operator party from ordinary wallet-user parties in the UI
+- [ ] Show the resolved Party ID and mode for each user in the list
+- [ ] Make Keycloak realm/client provisioning idempotent and repeatable
 
-## v1.3.0 — Backup and restore
+## v1.3.0 — Backups
 
-Currently unfinished.
+Mapped to
+[Validator Backups](https://docs.canton.network/global-synchronizer/production-operations/validator-backups).
+Two distinct backups are needed, and the order matters.
 
-- [ ] Back up validator identity (keys / participant identity)
-- [ ] Back up the validator database / config snapshot
-- [ ] Restore a node from a backup onto a fresh host
-- [ ] Scheduled backups with a retention policy
+- [ ] Pull the node identities backup from `/v0/admin/participant/identities`
+- [ ] Treat the identities dump as a secret (it holds participant private keys) and
+      push it to an external store, never into the repo or the cluster
+- [ ] Postgres dumps of both the validator-app and participant databases
+- [ ] Enforce the ordering rule: validator-app dump must precede the participant dump
+- [ ] Scheduled backups (target every 4 hours) with a retention window
 
-## v1.4.0 — Update and upgrade
+## v1.4.0 — Updates
 
-Currently unfinished.
+Mapped to
+[Validator Upgrades](https://docs.canton.network/global-synchronizer/production-operations/validator-upgrades).
+Only version upgrades need operator action; protocol upgrades don't.
 
-- [ ] Detect the installed Splice version against the network's expected version
-- [ ] Guided upgrade between Splice versions with a pre-flight check
-- [ ] Roll back to the previous version if an upgrade fails
-- [ ] Show migration ID changes and warn before a hard domain migration
+- [ ] Detect installed Splice version against the network's expected version
+- [ ] Compose upgrade by swapping the **full** bundle (compose file + start.sh +
+      `IMAGE_TAG`), not just the image tag
+- [ ] Guard rails: never drop Postgres, change migration IDs, or rotate secrets
+      during a version upgrade
+- [ ] Surface the relevant release notes before the operator confirms
 
-## v1.5.0 — Kubernetes
+## v1.5.0 — Disaster recovery
+
+Mapped to
+[Validator Disaster Recovery](https://docs.canton.network/global-synchronizer/production-operations/validator-disaster-recovery).
+
+- [ ] Restore a node from a Postgres backup (and warn when it's over 30 days old)
+- [ ] Re-onboard from an identities backup, keeping the same party hint and reusing
+      the existing onboarding secret
+- [ ] Flag that users onboarded after the backup must be re-onboarded by hand
+
+## v1.6.0 — KMS-backed keys (GCP / AWS)
+
+Mapped to
+[Validator Security](https://docs.canton.network/global-synchronizer/production-operations/validator-security).
+This is a Kubernetes-only capability and comes with hard constraints worth stating
+up front.
+
+- [ ] GCP KMS config on the participant Helm chart (`kms.type: gcp`, location /
+      project / key ring, `GOOGLE_APPLICATION_CREDENTIALS` secret)
+- [ ] AWS KMS config (`kms.type: aws`, region, access-key secret)
+- [ ] Make clear in the UI that KMS is **fresh-install only** — you cannot migrate
+      an existing non-KMS validator onto a KMS
+- [ ] Note the upstream caveat that the GCP/AWS KMS drivers require a licensed
+      Canton Enterprise
+
+> KMS is not available for Docker Compose deployments, so it depends on the
+> Kubernetes path below being solid first.
+
+## v1.7.0 — Kubernetes parity
 
 The Helm path exists but does not yet deploy a working validator end to end.
 
-- [ ] Get the Helm-based install to parity with the Compose path
-- [ ] Validate ingress, TLS and Keycloak on the cluster path
+- [ ] Bring the Helm install to parity with the Compose path
+- [ ] Validate ingress, TLS and Keycloak on the cluster
 - [ ] Document the kubeconfig and chart-value requirements
+- [ ] Unblock the KMS work above, which only runs on Kubernetes
 
-## v1.6.0 — Operations and monitoring
+## v1.8.0 — Operations and monitoring
 
 - [ ] Start / stop / restart a validator from the dashboard
 - [ ] Tail install and runtime logs in the browser
@@ -76,7 +127,6 @@ The Helm path exists but does not yet deploy a working validator end to end.
 
 Not scheduled, may not happen.
 
-- [ ] Roles beyond operator (read-only viewer) and an audit log
 - [ ] Prometheus metrics and alerting hooks
 - [ ] Bulk actions across several nodes at once
 - [ ] Container image and Helm chart for NodePilot itself
