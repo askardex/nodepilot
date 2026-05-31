@@ -90,23 +90,39 @@ Mapped to
       the existing onboarding secret
 - [ ] Flag that users onboarded after the backup must be re-onboarded by hand
 
-## v1.6.0 — KMS-backed keys (GCP / AWS)
+## v1.6.0 — KMS-backed keys
 
-Mapped to
-[Validator Security](https://docs.canton.network/global-synchronizer/production-operations/validator-security).
-This is a Kubernetes-only capability and comes with hard constraints worth stating
-up front.
+There are two separate things people mean by "KMS" here, and they have very
+different constraints.
 
-- [ ] GCP KMS config on the participant Helm chart (`kms.type: gcp`, location /
-      project / key ring, `GOOGLE_APPLICATION_CREDENTIALS` secret)
-- [ ] AWS KMS config (`kms.type: aws`, region, access-key secret)
-- [ ] Make clear in the UI that KMS is **fresh-install only** — you cannot migrate
-      an existing non-KMS validator onto a KMS
-- [ ] Note the upstream caveat that the GCP/AWS KMS drivers require a licensed
-      Canton Enterprise
+**Participant keys (Canton-side).** Storing the validator participant's protocol
+and namespace keys in a KMS is a Canton *Enterprise* feature, mapped in
+[Validator Security](https://docs.canton.network/global-synchronizer/production-operations/validator-security)
+and [KMS Operations](https://docs.canton.network/global-synchronizer/production-operations/kms-operations).
+Canton does expose a [KMS Driver API](https://docs.canton.network/global-synchronizer/reference/kms-driver-guide)
+for custom integrations, but the API artifact and the `kms` crypto provider both
+require a licensed Canton Enterprise build — a custom driver does not get you
+around that. The community Splice validator uses the `jce` provider with keys in
+the database. So NodePilot can *configure and wire up* KMS for operators who have
+Enterprise, but it cannot enable it on a community node.
 
-> KMS is not available for Docker Compose deployments, so it depends on the
-> Kubernetes path below being solid first.
+- [ ] GCP KMS wiring on the participant Helm chart (`kms.type: gcp`, location /
+      project / key ring, `GOOGLE_APPLICATION_CREDENTIALS` secret) — Enterprise only
+- [ ] AWS KMS wiring (`kms.type: aws`, region, access-key secret) — Enterprise only
+- [ ] Make clear in the UI that this is Kubernetes-only, fresh-install only, and
+      needs a Canton Enterprise license
+
+**NodePilot's own secret store (our side).** This is fully in our control and does
+not depend on any Canton license. NodePilot already encrypts the secrets it stores
+(SSH credentials, onboarding secret) with AES-256-GCM in `src/lib/secrets.ts`. We
+can take that further:
+
+- [ ] Envelope-encrypt NodePilot's secret store with GCP or AWS KMS (KMS holds the
+      wrapper key, NodePilot stores only ciphertext)
+- [ ] Push the node identities backup to a cloud Secret Manager rather than disk
+
+> The participant-key half is Kubernetes-only, so it depends on the Kubernetes
+> path below being solid first. The NodePilot-side half works on any deployment.
 
 ## v1.7.0 — Kubernetes parity
 
